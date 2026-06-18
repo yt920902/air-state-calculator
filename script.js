@@ -57,8 +57,31 @@ const exportCsvBtn = document.getElementById("exportCsvBtn");
 const historyBody = document.getElementById("historyBody");
 const chartCanvas = document.getElementById("chartCanvas");
 const plotHistoryToggle = document.getElementById("plotHistoryToggle");
+const chartClickToggle = document.getElementById("chartClickToggle");
+const chartInteractionStatus = document.getElementById("chartInteractionStatus");
 const exportChartPngBtn = document.getElementById("exportChartPngBtn");
 const printReportBtn = document.getElementById("printReportBtn");
+const processControls = {
+  start: document.getElementById("processStart"),
+  end: document.getElementById("processEnd"),
+  airflow: document.getElementById("processAirflow"),
+  status: document.getElementById("processStatus"),
+  type: document.getElementById("processType"),
+  deltaDb: document.getElementById("processDeltaDb"),
+  deltaX: document.getElementById("processDeltaX"),
+  deltaH: document.getElementById("processDeltaH"),
+  loadKw: document.getElementById("processLoadKw"),
+};
+const comfortControls = {
+  toggle: document.getElementById("comfortZoneToggle"),
+  mrt: document.getElementById("comfortMrt"),
+  airSpeed: document.getElementById("comfortAirSpeed"),
+  met: document.getElementById("comfortMet"),
+  clo: document.getElementById("comfortClo"),
+  pmv: document.getElementById("comfortPmv"),
+  ppd: document.getElementById("comfortPpd"),
+  message: document.getElementById("comfortMessage"),
+};
 const conditionSelects = [
   document.getElementById("enthalpyAir1"),
   document.getElementById("enthalpyAir2"),
@@ -131,6 +154,9 @@ let nextHistoryId = 1;
 let debounceTimer = null;
 let saveTimer = null;
 let isRestoring = false;
+let chartGeometry = null;
+let draggedHistoryId = null;
+let didDragChartPoint = false;
 
 function saturationPressure(tC, forceWater = false) {
   const tK = tC + 273.15;
@@ -626,6 +652,15 @@ function saveState() {
         coilAir2: coilControls.air2.value,
         coilAirflow: coilControls.airflow.value,
         plotHistory: plotHistoryToggle.checked,
+        chartClick: chartClickToggle.checked,
+        processStart: processControls.start.value,
+        processEnd: processControls.end.value,
+        processAirflow: processControls.airflow.value,
+        comfortZone: comfortControls.toggle.checked,
+        comfortMrt: comfortControls.mrt.value,
+        comfortAirSpeed: comfortControls.airSpeed.value,
+        comfortMet: comfortControls.met.value,
+        comfortClo: comfortControls.clo.value,
       },
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -674,6 +709,15 @@ function restoreState() {
       coilControls.air2.value = state.controls.coilAir2 || "";
       coilControls.airflow.value = state.controls.coilAirflow || "1000";
       plotHistoryToggle.checked = state.controls.plotHistory !== false;
+      chartClickToggle.checked = state.controls.chartClick !== false;
+      processControls.start.value = state.controls.processStart || "";
+      processControls.end.value = state.controls.processEnd || "";
+      processControls.airflow.value = state.controls.processAirflow || "1000";
+      comfortControls.toggle.checked = state.controls.comfortZone !== false;
+      comfortControls.mrt.value = state.controls.comfortMrt || "25";
+      comfortControls.airSpeed.value = state.controls.comfortAirSpeed || "0.1";
+      comfortControls.met.value = state.controls.comfortMet || "1.1";
+      comfortControls.clo.value = state.controls.comfortClo || "0.7";
     }
     return true;
   } catch {
@@ -899,6 +943,39 @@ function conditionOptionLabel(item, index) {
   return `No.${no} ${formatNumber(item.db, p)}℃ / ${formatNumber(item.rh, p)}%`;
 }
 
+function processOptionLabel(item, index) {
+  return conditionOptionLabel(item, index);
+}
+
+function updateProcessSelectors() {
+  const previousStart = processControls.start.value;
+  const previousEnd = processControls.end.value;
+  const options = ['<option value="">点を選択</option>']
+    .concat(history.map((item, index) => `<option value="${item.id}">${escapeHtml(processOptionLabel(item, index))}</option>`))
+    .join("");
+
+  processControls.start.innerHTML = options;
+  processControls.end.innerHTML = options;
+
+  const hasId = (value) => history.some((item) => String(item.id) === value);
+  if (hasId(previousStart)) {
+    processControls.start.value = previousStart;
+  }
+  if (hasId(previousEnd)) {
+    processControls.end.value = previousEnd;
+  }
+
+  if (history.length >= 2) {
+    if (!processControls.start.value) {
+      processControls.start.value = String(history[1].id);
+    }
+    if (!processControls.end.value) {
+      processControls.end.value = String(history[0].id);
+    }
+  }
+  calculateProcess();
+}
+
 function updateConditionSelectors() {
   const selectedValues = new Map(conditionSelects.map((select) => [select.id, select.value]));
   const optionHtml = ['<option value="">条件を選択</option>']
@@ -912,11 +989,67 @@ function updateConditionSelectors() {
       select.value = previousValue;
     }
   });
+  updateProcessSelectors();
 }
 
 function getCondition(select) {
   const id = Number(select.value);
   return history.find((item) => item.id === id) || null;
+}
+
+function getProcessPoints() {
+  const startId = Number(processControls.start.value);
+  const endId = Number(processControls.end.value);
+  return {
+    start: history.find((item) => item.id === startId) || null,
+    end: history.find((item) => item.id === endId) || null,
+  };
+}
+
+function classifyProcess(deltaDb, deltaX) {
+  const temperatureChange = Math.abs(deltaDb) < 0.2 ? "" : deltaDb > 0 ? "加熱" : "冷却";
+  const moistureChange = Math.abs(deltaX) < 0.1 ? "" : deltaX > 0 ? "加湿" : "除湿";
+  if (!temperatureChange && !moistureChange) {
+    return "変化なし";
+  }
+  if (!temperatureChange) {
+    return moistureChange;
+  }
+  if (!moistureChange) {
+    return temperatureChange;
+  }
+  return `${temperatureChange}・${moistureChange}`;
+}
+
+function calculateProcess() {
+  const { start, end } = getProcessPoints();
+  const airflow = Number(processControls.airflow.value);
+  const precision = getDisplayPrecision();
+  processControls.status.textContent = "2点を選択";
+  processControls.type.textContent = "-";
+  processControls.deltaDb.textContent = "-";
+  processControls.deltaX.textContent = "-";
+  processControls.deltaH.textContent = "-";
+  processControls.loadKw.textContent = "-";
+
+  if (!start || !end || start.id === end.id) {
+    return;
+  }
+  if (!Number.isFinite(airflow) || airflow < 0) {
+    processControls.status.textContent = "風量エラー";
+    return;
+  }
+
+  const deltaDb = end.db - start.db;
+  const deltaX = end.x - start.x;
+  const deltaH = end.h - start.h;
+  const loadKw = Math.abs(deltaH) * airflow * AIR_DENSITY / 3600;
+  processControls.type.textContent = classifyProcess(deltaDb, deltaX);
+  processControls.deltaDb.textContent = formatSigned(deltaDb, precision);
+  processControls.deltaX.textContent = formatSigned(deltaX, precision);
+  processControls.deltaH.textContent = formatSigned(deltaH, precision);
+  processControls.loadKw.textContent = formatFlexible(loadKw, precision);
+  processControls.status.textContent = "計算済み";
 }
 
 function loadHistoryToInputs(id) {
@@ -1210,7 +1343,272 @@ function resetInputs() {
   scheduleSave();
 }
 
+function getComfortSettings() {
+  const settings = {
+    mrt: Number(comfortControls.mrt.value),
+    airSpeed: Number(comfortControls.airSpeed.value),
+    met: Number(comfortControls.met.value),
+    clo: Number(comfortControls.clo.value),
+  };
+  return Object.values(settings).every(Number.isFinite) && settings.airSpeed >= 0 && settings.met > 0 && settings.clo >= 0
+    ? settings
+    : null;
+}
+
+function calculatePmv(airTemperature, radiantTemperature, airSpeed, relativeHumidity, met, clo) {
+  if (
+    ![airTemperature, radiantTemperature, airSpeed, relativeHumidity, met, clo].every(Number.isFinite) ||
+    airSpeed < 0 ||
+    relativeHumidity < 0 ||
+    relativeHumidity > 100 ||
+    met <= 0 ||
+    clo < 0
+  ) {
+    return null;
+  }
+
+  const vaporPressure = relativeHumidity * 10 * Math.exp(16.6536 - 4030.183 / (airTemperature + 235));
+  const clothingInsulation = 0.155 * clo;
+  const metabolicRate = met * 58.15;
+  const internalHeat = metabolicRate;
+  const clothingAreaFactor = clothingInsulation <= 0.078
+    ? 1 + 1.29 * clothingInsulation
+    : 1.05 + 0.645 * clothingInsulation;
+  const forcedConvection = 12.1 * Math.sqrt(Math.max(airSpeed, 0));
+  const airKelvin = airTemperature + 273;
+  const radiantKelvin = radiantTemperature + 273;
+  const p1 = clothingInsulation * clothingAreaFactor;
+  const p2 = p1 * 3.96;
+  const p3 = p1 * 100;
+  const p4 = p1 * airKelvin;
+  const p5 = 308.7 - 0.028 * internalHeat + p2 * (radiantKelvin / 100) ** 4;
+  const initialClothingTemperature = airKelvin + (35.5 - airTemperature) / (3.5 * clothingInsulation + 0.1);
+  let xn = initialClothingTemperature / 100;
+  let xf = initialClothingTemperature / 50;
+  let heatTransfer = forcedConvection;
+
+  for (let iteration = 0; iteration < 150 && Math.abs(xn - xf) > 0.00015; iteration += 1) {
+    xf = (xf + xn) / 2;
+    const naturalConvection = 2.38 * Math.abs(100 * xf - airKelvin) ** 0.25;
+    heatTransfer = Math.max(forcedConvection, naturalConvection);
+    xn = (p5 + p4 * heatTransfer - p2 * xn ** 4) / (100 + p3 * heatTransfer);
+  }
+
+  const clothingSurfaceTemperature = 100 * xn - 273;
+  const skinDiffusion = 3.05 * 0.001 * (5733 - 6.99 * internalHeat - vaporPressure);
+  const regulatorySweating = internalHeat > 58.15 ? 0.42 * (internalHeat - 58.15) : 0;
+  const latentRespiration = 1.7e-5 * metabolicRate * (5867 - vaporPressure);
+  const dryRespiration = 0.0014 * metabolicRate * (34 - airTemperature);
+  const radiation = 3.96 * clothingAreaFactor * (xn ** 4 - (radiantKelvin / 100) ** 4);
+  const convection = clothingAreaFactor * heatTransfer * (clothingSurfaceTemperature - airTemperature);
+  const thermalSensationTransfer = 0.303 * Math.exp(-0.036 * metabolicRate) + 0.028;
+  const pmv = thermalSensationTransfer * (
+    internalHeat - skinDiffusion - regulatorySweating - latentRespiration - dryRespiration - radiation - convection
+  );
+  const ppd = 100 - 95 * Math.exp(-0.03353 * pmv ** 4 - 0.2179 * pmv ** 2);
+  return Number.isFinite(pmv) && Number.isFinite(ppd) ? { pmv, ppd } : null;
+}
+
+function updateComfortReadout(result) {
+  const settings = getComfortSettings();
+  comfortControls.pmv.textContent = "-";
+  comfortControls.ppd.textContent = "-";
+
+  if (!settings) {
+    comfortControls.message.textContent = "快適範囲の入力値を確認してください。";
+    return;
+  }
+  if (!result) {
+    comfortControls.message.textContent = "計算点を入力すると快適性を評価します。";
+    return;
+  }
+
+  const comfort = calculatePmv(result.db, settings.mrt, settings.airSpeed, result.rh, settings.met, settings.clo);
+  if (!comfort) {
+    comfortControls.message.textContent = "計算点の快適性を評価できません。";
+    return;
+  }
+  comfortControls.pmv.textContent = formatFlexible(comfort.pmv, 2);
+  comfortControls.ppd.textContent = formatFlexible(comfort.ppd, 1);
+  comfortControls.message.textContent = Math.abs(comfort.pmv) <= 0.5 && comfort.ppd <= 10
+    ? "計算点は快適範囲内です。"
+    : comfort.pmv < -0.5
+      ? "計算点は寒い側です。"
+      : "計算点は暑い側です。";
+}
+
+function drawComfortZone(ctx, xToPx, yToPx, pressure, dbMin, dbMax, xMax) {
+  if (!comfortControls.toggle.checked) {
+    return;
+  }
+  const settings = getComfortSettings();
+  if (!settings) {
+    return;
+  }
+
+  const lower = [];
+  const upper = [];
+  for (let db = Math.max(dbMin, 10); db <= Math.min(dbMax, 36); db += 0.5) {
+    const accepted = [];
+    for (let rh = 5; rh <= 95; rh += 1) {
+      const comfort = calculatePmv(db, settings.mrt, settings.airSpeed, rh, settings.met, settings.clo);
+      if (comfort && Math.abs(comfort.pmv) <= 0.5 && comfort.ppd <= 10) {
+        const humidity = humidityRatioFromDbRh(db, rh, pressure) * 1000;
+        if (Number.isFinite(humidity) && humidity <= xMax) {
+          accepted.push(humidity);
+        }
+      }
+    }
+    if (accepted.length > 0) {
+      lower.push({ db, humidity: accepted[0] });
+      upper.push({ db, humidity: accepted[accepted.length - 1] });
+    }
+  }
+  if (lower.length < 2) {
+    return;
+  }
+
+  ctx.beginPath();
+  lower.forEach((point, index) => {
+    const x = xToPx(point.db);
+    const y = yToPx(point.humidity);
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  upper.slice().reverse().forEach((point) => ctx.lineTo(xToPx(point.db), yToPx(point.humidity)));
+  ctx.closePath();
+  ctx.fillStyle = "rgba(8, 127, 117, 0.14)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(8, 127, 117, 0.72)";
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.fillStyle = "#075f58";
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("快適範囲", xToPx(lower[0].db) + 5, yToPx(upper[0].humidity) - 7);
+}
+
+function drawProcessLine(ctx, xToPx, yToPx, margin, plotW, plotH) {
+  const { start, end } = getProcessPoints();
+  if (!start || !end || start.id === end.id) {
+    return;
+  }
+  const startX = xToPx(start.db);
+  const startY = yToPx(start.x);
+  const endX = xToPx(end.db);
+  const endY = yToPx(end.x);
+  const inside = (x, y) => x >= margin.left && x <= margin.left + plotW && y >= margin.top && y <= margin.top + plotH;
+  if (!inside(startX, startY) || !inside(endX, endY)) {
+    return;
+  }
+
+  ctx.strokeStyle = "#be123c";
+  ctx.fillStyle = "#be123c";
+  ctx.lineWidth = 2.6;
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+
+  const angle = Math.atan2(endY - startY, endX - startX);
+  const arrowLength = 11;
+  ctx.beginPath();
+  ctx.moveTo(endX, endY);
+  ctx.lineTo(endX - arrowLength * Math.cos(angle - Math.PI / 6), endY - arrowLength * Math.sin(angle - Math.PI / 6));
+  ctx.lineTo(endX - arrowLength * Math.cos(angle + Math.PI / 6), endY - arrowLength * Math.sin(angle + Math.PI / 6));
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.font = "bold 11px sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("A", startX, startY - 10);
+  ctx.fillText("B", endX, endY - 10);
+}
+
+function stateFromChartPosition(clientX, clientY) {
+  if (!chartGeometry) {
+    return null;
+  }
+  const rect = chartCanvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  const { margin, plotW, plotH, dbMin, dbMax, xMax, pressure } = chartGeometry;
+  if (x < margin.left || x > margin.left + plotW || y < margin.top || y > margin.top + plotH) {
+    return null;
+  }
+  const db = dbMin + ((x - margin.left) / plotW) * (dbMax - dbMin);
+  const humidity = ((margin.top + plotH - y) / plotH) * xMax;
+  const saturationHumidity = humidityRatioFromDbRh(db, 100, pressure) * 1000;
+  if (!Number.isFinite(humidity) || humidity <= 0 || humidity > saturationHumidity) {
+    return null;
+  }
+  try {
+    return completeState(db, humidity / 1000, pressure);
+  } catch {
+    return null;
+  }
+}
+
+function findHistoryPointAt(clientX, clientY) {
+  if (!chartGeometry || !plotHistoryToggle.checked) {
+    return null;
+  }
+  const rect = chartCanvas.getBoundingClientRect();
+  const pointerX = clientX - rect.left;
+  const pointerY = clientY - rect.top;
+  let nearest = null;
+  let nearestDistance = 13;
+  history.forEach((item) => {
+    const distance = Math.hypot(chartGeometry.xToPx(item.db) - pointerX, chartGeometry.yToPx(item.x) - pointerY);
+    if (distance < nearestDistance) {
+      nearest = item;
+      nearestDistance = distance;
+    }
+  });
+  return nearest;
+}
+
+function addPointFromChart(event) {
+  if (!chartClickToggle.checked) {
+    return;
+  }
+  const state = stateFromChartPosition(event.clientX, event.clientY);
+  if (!state) {
+    showStatus("飽和曲線より下の範囲をクリックしてください。", "error");
+    return;
+  }
+  setInputSnapshot({ db: state.db.toFixed(1), rh: state.rh.toFixed(1) });
+  collectInputs();
+  calculate({ addHistory: true });
+  showStatus("線図の状態点を履歴に追加しました。", "success");
+}
+
+function finishChartPointDrag() {
+  if (draggedHistoryId === null) {
+    return;
+  }
+  chartCanvas.classList.remove("is-dragging");
+  if (didDragChartPoint) {
+    renderHistory();
+    updateConditionSelectors();
+    calculateEnthalpyDifference();
+    calculateMixedAir();
+    calculateHumidification();
+    calculateCoilCapacity();
+    calculateProcess();
+    drawChart(currentResult);
+    showStatus("履歴点の条件を更新しました。", "success");
+    scheduleSave();
+  }
+  draggedHistoryId = null;
+  didDragChartPoint = false;
+}
+
 function drawChart(result) {
+  updateComfortReadout(result);
   const canvas = chartCanvas;
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -1236,6 +1634,7 @@ function drawChart(result) {
 
   const xToPx = (db) => margin.left + ((db - dbMin) / (dbMax - dbMin)) * plotW;
   const yToPx = (humidity) => margin.top + plotH - (humidity / xMax) * plotH;
+  chartGeometry = { margin, plotW, plotH, dbMin, dbMax, xMax, pressure, xToPx, yToPx };
 
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, width, height);
@@ -1282,6 +1681,8 @@ function drawChart(result) {
   ctx.fillText("絶対湿度 g/kg'", 0, 0);
   ctx.restore();
 
+  drawComfortZone(ctx, xToPx, yToPx, pressure, dbMin, dbMax, xMax);
+
   [20, 40, 60, 80, 100].forEach((rh) => {
     ctx.beginPath();
     let started = false;
@@ -1311,6 +1712,8 @@ function drawChart(result) {
       ctx.fillText(`${rh}%`, xToPx(labelDb), yToPx(labelW) - 5);
     }
   });
+
+  drawProcessLine(ctx, xToPx, yToPx, margin, plotW, plotH);
 
   if (shouldPlotHistory && history.length > 0) {
     history.slice().reverse().forEach((item, reverseIndex) => {
@@ -1411,6 +1814,7 @@ precisionInput.addEventListener("input", () => {
   calculateMixedAir();
   calculateHumidification();
   calculateCoilCapacity();
+  calculateProcess();
   scheduleSave();
 });
 presetButtons.forEach((button) => {
@@ -1424,6 +1828,79 @@ plotHistoryToggle.addEventListener("change", () => {
   drawChart(currentResult);
   scheduleSave();
 });
+chartClickToggle.addEventListener("change", () => {
+  chartInteractionStatus.textContent = chartClickToggle.checked ? "クリック入力 ON" : "クリック入力 OFF";
+  scheduleSave();
+});
+[
+  processControls.start,
+  processControls.end,
+  processControls.airflow,
+].forEach((control) => {
+  control.addEventListener("input", () => {
+    calculateProcess();
+    drawChart(currentResult);
+    scheduleSave();
+  });
+  control.addEventListener("change", () => {
+    calculateProcess();
+    drawChart(currentResult);
+    scheduleSave();
+  });
+});
+[
+  comfortControls.toggle,
+  comfortControls.mrt,
+  comfortControls.airSpeed,
+  comfortControls.met,
+  comfortControls.clo,
+].forEach((control) => {
+  control.addEventListener("input", () => {
+    drawChart(currentResult);
+    scheduleSave();
+  });
+  control.addEventListener("change", () => {
+    drawChart(currentResult);
+    scheduleSave();
+  });
+});
+chartCanvas.addEventListener("pointerdown", (event) => {
+  const historyPoint = findHistoryPointAt(event.clientX, event.clientY);
+  if (historyPoint) {
+    event.preventDefault();
+    draggedHistoryId = historyPoint.id;
+    didDragChartPoint = false;
+    chartCanvas.classList.add("is-dragging");
+    if (chartCanvas.setPointerCapture) {
+      chartCanvas.setPointerCapture(event.pointerId);
+    }
+    return;
+  }
+  addPointFromChart(event);
+});
+chartCanvas.addEventListener("pointermove", (event) => {
+  if (draggedHistoryId === null) {
+    return;
+  }
+  event.preventDefault();
+  const state = stateFromChartPosition(event.clientX, event.clientY);
+  const item = history.find((entry) => entry.id === draggedHistoryId);
+  if (!state || !item) {
+    return;
+  }
+  Object.assign(item, state);
+  item.label = `線図編集 ${formatNumber(state.db, item.precision)}℃ / ${formatNumber(state.rh, item.precision)}%`;
+  didDragChartPoint = true;
+  calculateProcess();
+  drawChart(currentResult);
+});
+chartCanvas.addEventListener("pointerup", (event) => {
+  if (chartCanvas.releasePointerCapture && chartCanvas.hasPointerCapture?.(event.pointerId)) {
+    chartCanvas.releasePointerCapture(event.pointerId);
+  }
+  finishChartPointDrag();
+});
+chartCanvas.addEventListener("pointercancel", finishChartPointDrag);
 exportChartPngBtn.addEventListener("click", exportChartPng);
 printReportBtn.addEventListener("click", printReport);
 exportCsvBtn.addEventListener("click", exportHistoryCsv);
@@ -1524,10 +2001,12 @@ const restored = restoreState();
 const appliedUrl = applyUrlState();
 collectInputs();
 updateConditionSelectors();
+chartInteractionStatus.textContent = chartClickToggle.checked ? "クリック入力 ON" : "クリック入力 OFF";
 calculateEnthalpyDifference();
 calculateMixedAir();
 calculateHumidification();
 calculateCoilCapacity();
+calculateProcess();
 drawChart(currentResult);
 if (appliedUrl) {
   calculate({ addHistory: false });
