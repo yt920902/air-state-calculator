@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>湿り空気状態値算出</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">湿り空気状態値算出</p>
+          <h1>空気状態計算</h1>
+        </div>
+        <div class="condition-bar" aria-label="計算条件">
+          <label>
+            <span>空気の全圧</span>
+            <input id="pressure" type="number" inputmode="decimal" step="0.001" value="101.325">
+            <small>kPa</small>
+          </label>
+          <label>
+            <span>小数点以下</span>
+            <input id="precision" type="number" inputmode="numeric" min="0" max="4" step="1" value="1">
+            <small>桁</small>
+          </label>
+        </div>
+      </header>
+
+      <section class="tool-panel" aria-label="空気状態入力">
+        <div class="panel-header">
+          <h2>入力</h2>
+          <span id="inputCount" class="count-badge">0 / 2</span>
+        </div>
+
+        <div class="field-grid">
+          <label class="field-card">
+            <span>乾球温度</span>
+            <input id="input-db" data-key="db" type="number" inputmode="decimal" step="0.1" autocomplete="off">
+            <small>℃</small>
+          </label>
+          <label class="field-card">
+            <span>相対湿度</span>
+            <input id="input-rh" data-key="rh" type="number" inputmode="decimal" step="0.1" autocomplete="off">
+            <small>%</small>
+          </label>
+          <label class="field-card">
+            <span>絶対湿度</span>
+            <input id="input-x" data-key="x" type="number" inputmode="decimal" step="0.1" autocomplete="off">
+            <small>g/kg'</small>
+          </label>
+          <label class="field-card">
+            <span>比エンタルピ</span>
+            <input id="input-h" data-key="h" type="number" inputmode="decimal" step="0.1" autocomplete="off">
+            <small>kJ/kg'</small>
+          </label>
+          <label class="field-card">
+            <span>露点温度</span>
+            <input id="input-dp" data-key="dp" type="number" inputmode="decimal" step="0.1" autocomplete="off">
+            <small>℃</small>
+          </label>
+          <label class="field-card">
+            <span>湿球温度</span>
+            <input id="input-wb" data-key="wb" type="number" inputmode="decimal" step="0.1" autocomplete="off">
+            <small>℃</small>
+          </label>
+        </div>
+
+        <div class="preset-row" aria-label="プリセット">
+          <button class="preset-button" type="button" data-preset="office">室内標準</button>
+          <button class="preset-button" type="button" data-preset="summer">夏外気</button>
+          <button class="preset-button" type="button" data-preset="winter">冬外気</button>
+          <button class="preset-button" type="button" data-preset="dehumidified">除湿後</button>
+          <button class="preset-button" type="button" data-preset="supply">冷房吹出</button>
+        </div>
+
+        <div class="action-row">
+          <button id="calculateBtn" class="primary-button" type="button">計算</button>
+          <button id="copyBtn" class="ghost-button" type="button" disabled>結果をコピー</button>
+          <button id="shareUrlBtn" class="ghost-button" type="button">共有URLコピー</button>
+          <button id="resetBtn" class="ghost-button" type="button">リセット</button>
+        </div>
+        <p id="status" class="status-line" role="alert">状態値を2つ入力してください。</p>
+      </section>
+
+      <section class="result-layout" aria-label="計算結果">
+        <div class="tool-panel result-panel">
+          <div class="panel-header">
+            <h2>計算結果</h2>
+            <span id="pairLabel" class="pair-badge">未計算</span>
+          </div>
+          <div class="result-grid">
+            <div class="result-item">
+              <span>乾球温度</span>
+              <strong id="out-db">-</strong>
+              <small>℃</small>
+            </div>
+            <div class="result-item">
+              <span>相対湿度</span>
+              <strong id="out-rh">-</strong>
+              <small>%</small>
+            </div>
+            <div class="result-item">
+              <span>絶対湿度</span>
+              <strong id="out-x">-</strong>
+              <small>g/kg'</small>
+            </div>
+            <div class="result-item">
+              <span>比エンタルピ</span>
+              <strong id="out-h">-</strong>
+              <small>kJ/kg'</small>
+            </div>
+            <div class="result-item">
+              <span>露点温度</span>
+              <strong id="out-dp">-</strong>
+              <small>℃</small>
+            </div>
+            <div class="result-item">
+              <span>湿球温度</span>
+              <strong id="out-wb">-</strong>
+              <small>℃</small>
+            </div>
+            <div class="result-item">
+              <span>不快指数</span>
+              <strong id="out-di">-</strong>
+              <small>-</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="tool-panel chart-panel">
+          <div class="panel-header">
+            <h2>空気線図</h2>
+            <div class="panel-actions chart-actions">
+              <label class="toggle-row">
+                <input id="plotHistoryToggle" type="checkbox" checked>
+                <span>履歴表示</span>
+              </label>
+              <button id="exportChartPngBtn" class="ghost-button small-button" type="button">PNG出力</button>
+              <button id="printReportBtn" class="ghost-button small-button" type="button">PDF/印刷</button>
+            </div>
+          </div>
+          <canvas id="chartCanvas" width="920" height="420" aria-label="空気線図"></canvas>
+        </div>
+      </section>
+
+      <section class="calc-layout" aria-label="追加計算">
+        <div class="tool-panel calc-panel" aria-label="エンタルピ差算出">
+          <div class="panel-header">
+            <h2>エンタルピ差算出</h2>
+            <span id="enthalpyStatus" class="pair-badge">未計算</span>
+          </div>
+          <div class="calc-form">
+            <label>
+              <span>空気条件1</span>
+              <select id="enthalpyAir1"></select>
+            </label>
+            <label>
+              <span>空気条件2</span>
+              <select id="enthalpyAir2"></select>
+            </label>
+            <label>
+              <span>風量</span>
+              <input id="enthalpyAirflow" type="number" inputmode="decimal" min="0" step="100" value="1000">
+              <small>m³/h</small>
+            </label>
+          </div>
+          <div class="mini-result-grid">
+            <div class="result-item compact">
+              <span>比エンタルピ差</span>
+              <strong id="enthalpyDiff">-</strong>
+              <small>kJ/kg'</small>
+            </div>
+            <div class="result-item compact">
+              <span>熱量</span>
+              <strong id="enthalpyLoad">-</strong>
+              <small>kJ/h</small>
+            </div>
+            <div class="result-item compact">
+              <span>熱量</span>
+              <strong id="enthalpyKw">-</strong>
+              <small>kW</small>
+            </div>
+            <div class="result-item compact">
+              <span>熱量</span>
+              <strong id="enthalpyKcal">-</strong>
+              <small>kcal/h</small>
+            </div>
+            <div class="result-item compact">
+              <span>冷凍能力</span>
+              <strong id="enthalpyRt">-</strong>
+              <small>USRT</small>
+            </div>
+          </div>
+          <div class="delta-table-wrap">
+            <table class="delta-table">
+              <thead>
+                <tr>
+                  <th>項目</th>
+                  <th>条件1</th>
+                  <th>条件2</th>
+                  <th>差</th>
+                </tr>
+              </thead>
+              <tbody id="deltaBody">
+                <tr class="empty-row">
+                  <td colspan="4">-</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="tool-panel calc-panel" aria-label="混合空気算出">
+          <div class="panel-header">
+            <h2>混合空気算出</h2>
+            <span id="mixStatus" class="pair-badge">未計算</span>
+          </div>
+          <div class="calc-form mix-form">
+            <label>
+              <span>空気条件1</span>
+              <select id="mixAir1"></select>
+            </label>
+            <label>
+              <span>風量1</span>
+              <input id="mixAirflow1" type="number" inputmode="decimal" min="0" step="100" value="500">
+              <small>m³/h</small>
+            </label>
+            <label>
+              <span>空気条件2</span>
+              <select id="mixAir2"></select>
+            </label>
+            <label>
+              <span>風量2</span>
+              <input id="mixAirflow2" type="number" inputmode="decimal" min="0" step="100" value="500">
+              <small>m³/h</small>
+            </label>
+          </div>
+          <div class="result-grid mix-result-grid">
+            <div class="result-item compact">
+              <span>乾球温度</span>
+              <strong id="mix-db">-</strong>
+              <small>℃</small>
+            </div>
+            <div class="result-item compact">
+              <span>相対湿度</span>
+              <strong id="mix-rh">-</strong>
+              <small>%</small>
+            </div>
+            <div class="result-item compact">
+              <span>絶対湿度</span>
+              <strong id="mix-x">-</strong>
+              <small>g/kg'</small>
+            </div>
+            <div class="result-item compact">
+              <span>比エンタルピ</span>
+              <strong id="mix-h">-</strong>
+              <small>kJ/kg'</small>
+            </div>
+            <div class="result-item compact">
+              <span>露点温度</span>
+              <strong id="mix-dp">-</strong>
+              <small>℃</small>
+            </div>
+            <div class="result-item compact">
+              <span>湿球温度</span>
+              <strong id="mix-wb">-</strong>
+              <small>℃</small>
+            </div>
+            <div class="result-item compact">
+              <span>不快指数</span>
+              <strong id="mix-di">-</strong>
+              <small>-</small>
+            </div>
+          </div>
+          <div class="action-row panel-action-row">
+            <button id="addMixHistoryBtn" class="ghost-button small-button" type="button" disabled>混合結果を履歴へ</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="engineering-layout" aria-label="設備概算">
+        <div class="tool-panel calc-panel" aria-label="加湿・除湿量算出">
+          <div class="panel-header">
+            <h2>加湿・除湿量算出</h2>
+            <span id="humidStatus" class="pair-badge">未計算</span>
+          </div>
+          <div class="calc-form">
+            <label>
+              <span>入口空気</span>
+              <select id="humidAir1"></select>
+            </label>
+            <label>
+              <span>出口空気</span>
+              <select id="humidAir2"></select>
+            </label>
+            <label>
+              <span>風量</span>
+              <input id="humidAirflow" type="number" inputmode="decimal" min="0" step="100" value="1000">
+              <small>m³/h</small>
+            </label>
+          </div>
+          <div class="mini-result-grid equipment-result-grid">
+            <div class="result-item compact">
+              <span>絶対湿度差</span>
+              <strong id="humidDeltaX">-</strong>
+              <small>g/kg'</small>
+            </div>
+            <div class="result-item compact">
+              <span>水分量</span>
+              <strong id="humidKgH">-</strong>
+              <small>kg/h</small>
+            </div>
+            <div class="result-item compact">
+              <span>水分量</span>
+              <strong id="humidLDay">-</strong>
+              <small>L/day</small>
+            </div>
+            <div class="result-item compact">
+              <span>潜熱目安</span>
+              <strong id="humidLatentKw">-</strong>
+              <small>kW</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="tool-panel calc-panel" aria-label="冷温水コイル能力概算">
+          <div class="panel-header">
+            <h2>冷温水コイル能力概算</h2>
+            <span id="coilStatus" class="pair-badge">未計算</span>
+          </div>
+          <div class="calc-form">
+            <label>
+              <span>入口空気</span>
+              <select id="coilAir1"></select>
+            </label>
+            <label>
+              <span>出口空気</span>
+              <select id="coilAir2"></select>
+            </label>
+            <label>
+              <span>風量</span>
+              <input id="coilAirflow" type="number" inputmode="decimal" min="0" step="100" value="1000">
+              <small>m³/h</small>
+            </label>
+          </div>
+          <div class="mini-result-grid equipment-result-grid">
+            <div class="result-item compact">
+              <span>運転方向</span>
+              <strong id="coilMode">-</strong>
+              <small>-</small>
+            </div>
+            <div class="result-item compact">
+              <span>全熱能力</span>
+              <strong id="coilTotalKw">-</strong>
+              <small>kW</small>
+            </div>
+            <div class="result-item compact">
+              <span>顕熱能力</span>
+              <strong id="coilSensibleKw">-</strong>
+              <small>kW</small>
+            </div>
+            <div class="result-item compact">
+              <span>潜熱能力</span>
+              <strong id="coilLatentKw">-</strong>
+              <small>kW</small>
+            </div>
+            <div class="result-item compact">
+              <span>SHF</span>
+              <strong id="coilShr">-</strong>
+              <small>-</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="tool-panel history-panel" aria-label="計算履歴">
+        <div class="panel-header">
+          <h2>履歴</h2>
+          <div class="panel-actions">
+            <button id="exportCsvBtn" class="ghost-button small-button" type="button" disabled>CSV出力</button>
+            <button id="clearHistoryBtn" class="icon-button" type="button" title="履歴を消去" aria-label="履歴を消去">×</button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>No.</th>
+                <th>入力</th>
+                <th>乾球 ℃</th>
+                <th>相対湿度 %</th>
+                <th>絶対湿度 g/kg'</th>
+                <th>比エンタルピ kJ/kg'</th>
+                <th>露点 ℃</th>
+                <th>湿球 ℃</th>
+                <th>不快指数</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody">
+              <tr class="empty-row">
+                <td colspan="10">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
