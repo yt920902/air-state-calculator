@@ -133,6 +133,10 @@
             <h2>空気線図</h2>
             <div class="panel-actions chart-actions">
               <label class="toggle-row">
+                <input id="chartClickToggle" type="checkbox" checked>
+                <span>クリック入力</span>
+              </label>
+              <label class="toggle-row">
                 <input id="plotHistoryToggle" type="checkbox" checked>
                 <span>履歴表示</span>
               </label>
@@ -140,7 +144,82 @@
               <button id="printReportBtn" class="ghost-button small-button" type="button">PDF/印刷</button>
             </div>
           </div>
-          <canvas id="chartCanvas" width="920" height="420" aria-label="空気線図"></canvas>
+          <canvas id="chartCanvas" width="920" height="420" aria-label="空気線図。クリックで状態点を追加し、履歴点をドラッグして移動できます。" aria-describedby="chartHelp"></canvas>
+          <p id="chartHelp" class="chart-help">線図内をクリックすると状態点を追加できます。履歴点はドラッグして条件を変更できます。</p>
+        </div>
+      </section>
+
+      <section class="tool-panel chart-workbench" aria-label="空気線図分析">
+        <div class="panel-header">
+          <h2>空気線図分析</h2>
+          <span id="chartInteractionStatus" class="pair-badge">クリック入力 ON</span>
+        </div>
+        <div class="chart-tool-grid">
+          <div class="chart-tool-card" aria-label="プロセス線分析">
+            <div class="chart-tool-heading">
+              <h3>プロセス線</h3>
+              <span id="processStatus" class="pair-badge">2点を選択</span>
+            </div>
+            <div class="chart-control-grid process-control-grid">
+              <label>
+                <span>始点 A</span>
+                <select id="processStart"></select>
+              </label>
+              <label>
+                <span>終点 B</span>
+                <select id="processEnd"></select>
+              </label>
+              <label>
+                <span>風量</span>
+                <input id="processAirflow" type="number" inputmode="decimal" min="0" step="100" value="1000">
+                <small>m³/h</small>
+              </label>
+            </div>
+            <div class="process-summary" aria-live="polite">
+              <div><span>変化</span><strong id="processType">-</strong></div>
+              <div><span>Δ乾球</span><strong id="processDeltaDb">-</strong><small>℃</small></div>
+              <div><span>Δ絶対湿度</span><strong id="processDeltaX">-</strong><small>g/kg'</small></div>
+              <div><span>Δエンタルピ</span><strong id="processDeltaH">-</strong><small>kJ/kg'</small></div>
+              <div><span>必要能力</span><strong id="processLoadKw">-</strong><small>kW</small></div>
+            </div>
+          </div>
+
+          <div class="chart-tool-card" aria-label="快適範囲設定">
+            <div class="chart-tool-heading">
+              <h3>快適範囲（PMV / PPD）</h3>
+              <label class="toggle-row compact-toggle">
+                <input id="comfortZoneToggle" type="checkbox" checked>
+                <span>線図に表示</span>
+              </label>
+            </div>
+            <div class="chart-control-grid comfort-control-grid">
+              <label>
+                <span>平均放射温度</span>
+                <input id="comfortMrt" type="number" inputmode="decimal" step="0.1" value="25">
+                <small>℃</small>
+              </label>
+              <label>
+                <span>風速</span>
+                <input id="comfortAirSpeed" type="number" inputmode="decimal" min="0" step="0.05" value="0.1">
+                <small>m/s</small>
+              </label>
+              <label>
+                <span>代謝量</span>
+                <input id="comfortMet" type="number" inputmode="decimal" min="0.5" step="0.1" value="1.1">
+                <small>met</small>
+              </label>
+              <label>
+                <span>着衣量</span>
+                <input id="comfortClo" type="number" inputmode="decimal" min="0" step="0.1" value="0.7">
+                <small>clo</small>
+              </label>
+            </div>
+            <div class="comfort-readout" aria-live="polite">
+              <div><span>計算点 PMV</span><strong id="comfortPmv">-</strong></div>
+              <div><span>計算点 PPD</span><strong id="comfortPpd">-</strong><small>%</small></div>
+              <p id="comfortMessage">計算点を入力すると快適性を評価します。</p>
+            </div>
+          </div>
         </div>
       </section>
 
